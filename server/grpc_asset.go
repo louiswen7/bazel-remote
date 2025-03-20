@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"os"
 
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc/codes"
@@ -21,6 +22,7 @@ import (
 	pb "github.com/buchgr/bazel-remote/v2/genproto/build/bazel/remote/execution/v2"
 
 	"github.com/buchgr/bazel-remote/v2/cache"
+	"github.com/bgentry/go-netrc/netrc"
 )
 
 // FetchServer implementation
@@ -213,6 +215,16 @@ func (s *grpcServer) fetchItem(ctx context.Context, uri string, headers http.Hea
 
 	req.Header = headers
 
+	// Add .netrc support
+	netrcPath := os.Getenv("HOME") + "/.netrc"
+	netrcFile, err := netrc.ParseFile(netrcPath)
+	if err == nil {
+		machine := netrcFile.FindMachine(u.Host)
+		if machine != nil {
+			req.SetBasicAuth(machine.Login, machine.Password)
+		}
+	}
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		s.errorLogger.Printf("failed to get URI: %s err: %v", uri, err)
@@ -229,7 +241,6 @@ func (s *grpcServer) fetchItem(ctx context.Context, uri string, headers http.Hea
 	expectedSize := resp.ContentLength
 	if expectedHash == "" || expectedSize < 0 {
 		// We can't call Put until we know the hash and size.
-
 		data, err := io.ReadAll(resp.Body)
 		if err != nil {
 			s.errorLogger.Printf("failed to read data: %v", uri)
@@ -250,7 +261,9 @@ func (s *grpcServer) fetchItem(ctx context.Context, uri string, headers http.Hea
 		rc = io.NopCloser(bytes.NewReader(data))
 	}
 
+        s.accessLogger.Printf("GRPC ASSET FETCH START %s %s %d", uri, expectedHash, expectedSize)
 	err = s.cache.Put(ctx, cache.CAS, expectedHash, expectedSize, rc)
+	s.accessLogger.Printf("GRPC ASSET FETCH DONE %s %s %d", uri, expectedHash, expectedSize)
 	if err != nil && err != io.EOF {
 		s.errorLogger.Printf("failed to Put %s: %v", expectedHash, err)
 		return "", int64(-1), err
