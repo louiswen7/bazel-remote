@@ -13,3 +13,5 @@
 /bazel-*
 
 /bazel-remote
+
+/build
